@@ -28,6 +28,26 @@ src/
 
 ```
 
+---  
+
+## 🛠 Requirements  
+
+Sebelum memulai, pastikan Anda telah memenuhi persyaratan berikut:  
+
+1. **Node.js**  
+   - Versi minimal **v16.x**.  
+   - [Unduh Node.js di sini](https://nodejs.org).  
+
+2. **MySQL**  
+   - Database MySQL versi minimal **8.x**.  
+   - [Unduh MySQL di sini](https://dev.mysql.com/downloads/).  
+
+3. **Nest CLI**  
+   - Instal CLI untuk pengelolaan proyek NestJS:  
+   ```bash  
+   npm install -g @nestjs/cli  
+
+
 ## 🚀 Getting Started
 
 ### 📥 Clone Repository
