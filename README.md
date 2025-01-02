@@ -13,14 +13,6 @@ Proyek ini bertujuan untuk menyediakan backend untuk aplikasi pembayaran di char
 - Database MySQL untuk penyimpanan data transaksi.
 
 ---
-
-## 🚀 Getting Started
-
-### 📥 Clone Repository
-```bash
-git clone https://github.com/your-username/midtrans-payment-gateway.git
-cd midtrans-payment-gateway
-
 ## Folder Structure 
 - Lib folder structure:
 ```
@@ -34,3 +26,12 @@ src/
 ├── test/                     # File testing aplikasi
 
 ```
+
+## 🚀 Getting Started
+
+### 📥 Clone Repository
+```bash
+git clone https://github.com/your-username/midtrans-payment-gateway.git
+cd midtrans-payment-gateway
+
+
