@@ -17,13 +17,14 @@ Proyek ini bertujuan untuk menyediakan backend untuk aplikasi pembayaran di char
 - Lib folder structure:
 ```
 src/
-├── app.controller.ts         # Controller utama aplikasi
-├── app.module.ts             # Root module aplikasi
+├── app.controller.ts        
+├── app.module.ts  
+├── app.service.ts            
 ├── payment/
-│   ├── payment.controller.ts # Controller untuk pembayaran
-│   ├── payment.service.ts    # Service untuk logika pembayaran
-│   ├── payment.module.ts     # Module untuk fitur pembayaran
-├── test/                     # File testing aplikasi
+│   ├── payment.controller.ts 
+│   ├── payment.service.ts    
+│   ├── payment.module.ts     
+├── test/                     
 
 ```
 
