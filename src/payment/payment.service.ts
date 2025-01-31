@@ -4,10 +4,9 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { TransactionDto } from './payment.model';
 import { TransactionEntity } from './transaction.entity';
-import { Cron } from '@nestjs/schedule'; 
-import { ConfigService } from '@nestjs/config';
+import { ConfigService } from '@nestjs/config'; 
+import { PaymentController } from './payment.controller';
 
-type NewType = Repository<TransactionEntity>;
 
 @Injectable()
 export class PaymentService {
@@ -16,7 +15,7 @@ export class PaymentService {
 
   constructor(
     @InjectRepository(TransactionEntity)
-    private transactionRepository: NewType,
+    private transactionRepository: Repository<TransactionEntity>,
     private configService: ConfigService,
   ) {
     this.snap = new midtransClient.Snap({
@@ -24,7 +23,7 @@ export class PaymentService {
       serverKey: this.configService.get<string>('MIDTRANS_SERVER_KEY'),
       clientKey: this.configService.get<string>('MIDTRANS_CLIENT_KEY'),
     });
-  
+
     this.core = new midtransClient.CoreApi({
       isProduction: false,
       serverKey: this.configService.get<string>('MIDTRANS_SERVER_KEY'),
@@ -32,41 +31,36 @@ export class PaymentService {
     });
   }
 
-  // Membulatkan angka ke bilangan genap terdekat
   private roundToEven(num: number): number {
     const rounded = Math.round(num);
     return rounded % 2 === 0 ? rounded : rounded + 1;
   }
 
-  // Membuat transaksi
   async createTransaction(transactionDto: TransactionDto) {
-    // Validasi bahwa user_id ada
     if (!transactionDto.user_id) {
       throw new Error('User ID is required and must be unique.');
     }
-  
-    // Periksa apakah user_id sudah ada di database (harus unik)
+
     const existingTransaction = await this.transactionRepository.findOne({
       where: { user_id: transactionDto.user_id },
     });
-  
+
     if (existingTransaction) {
       throw new Error('User ID must be unique. A transaction with this user_id already exists.');
     }
-  
+
     const taxRate1 = 0.12; // PPN 12%
     const taxRate2 = 0.05; // PJU 5%
     const pricePerKwh = 2466; // Harga per kWh
     const kwhPerRupiah = 1 / pricePerKwh;
-  
+
     let consumptionKwh: number;
     let baseAmount: number;
-  
-    // Validasi input
+
     if (transactionDto.isKwh === undefined || transactionDto.amount === undefined) {
       throw new Error('Both isKwh and amount must be provided');
     }
-  
+
     if (transactionDto.isKwh) {
       if (transactionDto.amount <= 0) {
         throw new Error('Amount in kWh must be greater than 0');
@@ -77,17 +71,17 @@ export class PaymentService {
       if (transactionDto.amount <= 0) {
         throw new Error('Amount in Rupiah must be greater than 0');
       }
-  
+
       const totalAmount = transactionDto.amount;
       baseAmount = totalAmount / (1 + taxRate1 + taxRate2);
       consumptionKwh = baseAmount * kwhPerRupiah;
     }
-  
+
     baseAmount = Math.round(baseAmount);
     const taxAmount1 = Math.round(baseAmount * taxRate1);
     const taxAmount2 = Math.round(baseAmount * taxRate2);
     const totalAmount = baseAmount + taxAmount1 + taxAmount2;
-  
+
     transactionDto.itemDetails = [
       {
         id: 'electricity',
@@ -108,7 +102,7 @@ export class PaymentService {
         name: 'PJU 5%',
       },
     ];
-  
+
     const parameter = {
       transaction_details: {
         order_id: transactionDto.order_id,
@@ -129,116 +123,106 @@ export class PaymentService {
       },
       item_details: transactionDto.itemDetails,
     };
-  
-    console.log('Payload to Midtrans:', JSON.stringify(parameter, null, 2));
-    console.log('User ID being saved:', transactionDto.user_id);
 
-  
-    // Buat transaksi di Midtrans
     const response = await this.snap.createTransaction(parameter);
-  
-    // Simpan data transaksi ke database
+
     const transaction = new TransactionEntity();
     transaction.order_id = transactionDto.order_id;
     transaction.transaction_status = 'pending';
     transaction.payment_type = 'undefined';
     transaction.gross_amount = parameter.transaction_details.gross_amount;
-    transaction.ppn = taxAmount1; // Simpan PPN
-    transaction.pju = taxAmount2; // Simpan PJU
+    transaction.ppn = taxAmount1;
+    transaction.pju = taxAmount2;
     transaction.transaction_time = new Date();
-    transaction.user_id = transactionDto.user_id; // Simpan user_id yang unik
-  
+    transaction.user_id = transactionDto.user_id;
+
     await this.transactionRepository.save(transaction);
-  
-    return response;
+
+    console.log('Transaction created successfully', response);
+    return { 
+      response,
+      transaction: {
+        order_id: transaction.order_id,
+        user_id: transaction.user_id,
+        transaction_status: transaction.transaction_status,
+        payment_type: transaction.payment_type,
+        gross_amount: transaction.gross_amount,
+        ppn: transaction.ppn,
+        pju: transaction.pju,
+        transaction_time: transaction.transaction_time,
+     },
+    };
   }
-  
-  // Mengecek status transaksi di Midtrans
+
   async checkTransactionStatus(orderId: string) {
     try {
       const statusResponse = await this.core.transaction.status(orderId);
-  
-      // Update status transaksi di database
+
       const transaction = await this.transactionRepository.findOne({
         where: { order_id: orderId },
       });
 
-      
-  
       if (transaction) {
         transaction.transaction_status = statusResponse.transaction_status;
         transaction.payment_type = statusResponse.payment_type || transaction.payment_type;
-  
-        // Tangkap detail metode pembayaran berdasarkan tipe pembayaran
-        let paymentDetail = null;
-        switch (statusResponse.payment_type) {
-          case 'bank_transfer':
-            paymentDetail = statusResponse.va_numbers?.[0]?.bank || 'Bank Transfer';
-            break;
-          case 'qris':
-            paymentDetail = statusResponse.acquirer
-              ? `QRIS (${statusResponse.acquirer})`
-              : 'QRIS Payment';
-            break;
-          case 'gopay':
-            paymentDetail = 'GoPay';
-            break;
-          case 'shopeepay':
-            paymentDetail = 'ShopeePay';
-            break;
-          case 'credit_card':
-            paymentDetail = `Credit Card (${statusResponse.masked_card || 'Unknown Card'})`;
-            break;
-          case 'cstore':
-            paymentDetail = `Convenience Store: ${statusResponse.store}`;
-            break;
-          default:
-            paymentDetail = 'Other Payment Method';
-            break;
-        }
-  
-        transaction.payment_detail = paymentDetail;
         transaction.gross_amount = statusResponse.gross_amount || transaction.gross_amount;
         transaction.transaction_time = new Date(statusResponse.transaction_time || transaction.transaction_time);
-  
-        // Simpan status baru ke database
+
         await this.transactionRepository.save(transaction);
       }
-  
-      return statusResponse;
+
+      return { status: 'success',
+        message: 'Transaction created successfully',
+        data: {
+        
+          order_id: transaction.order_id,
+          user_id: transaction.user_id,
+          transaction_status: transaction.transaction_status,
+          payment_type: transaction.payment_type,
+          gross_amount: transaction.gross_amount,
+          ppn: transaction.ppn,
+          pju: transaction.pju,
+          transaction_time: transaction.transaction_time,
+       },
+      };
     } catch (error) {
-      console.error(`Error checking status for order ID ${orderId}:`, error.message);
       throw error;
     }
   }
+  async handleWebhookNotification(payload: any) {
+    const {
+      order_id,
+      transaction_status,
+      payment_type,
+      gross_amount,
+      transaction_time,
+      acquirer,
   
-  // Polling otomatis untuk transaksi pending
-  @Cron('* * * * *')
-async pollTransactions() {
-  const batchSize = 10; // Batasi jumlah transaksi yang diperiksa per iterasi
-  let offset = 0; // Awal dari transaksi yang diambil
-
-  let pendingTransactions: TransactionEntity[];
-
-  do {
-    // Ambil batch transaksi pending dari database
-    pendingTransactions = await this.transactionRepository.find({
-      where: { transaction_status: 'pending' },
-      take: batchSize,
-      skip: offset,
+       // Ambil acquirer dari payload Midtrans
+    } = payload;
+  
+    const transaction = await this.transactionRepository.findOne({
+      where: { order_id: order_id },
     });
-
-    // Proses setiap transaksi dalam batch
-    for (const transaction of pendingTransactions) {
-      try {
-        const statusResponse = await this.checkTransactionStatus(transaction.order_id);
-        console.log(`Updated status for order ID ${transaction.order_id}:`, statusResponse.transaction_status);
-      } catch (error) {
-        console.error(`Failed to update status for order ID ${transaction.order_id}:`, error.message);
-      }
+  
+    if (!transaction) {
+      console.error(`Transaction with order ID ${order_id} not found.`);
+      return;
     }
+  
+    transaction.transaction_status = transaction_status;
+    transaction.payment_type = payment_type;
+    transaction.gross_amount = gross_amount;
+    transaction.transaction_time = new Date(transaction_time);
+    transaction.payment_detail = acquirer || null; // Simpan acquirer sebagai payment_detail
+   
+  
+  }
+  async getTransactionByOrderId(orderId: string): Promise<TransactionEntity | null> {
+    return this.transactionRepository.findOne({
+      where: { order_id: orderId },
+    });
+  }
+  
+}
 
-    offset += batchSize; // Perbarui offset untuk batch berikutnya
-  } while (pendingTransactions.length > 0); // Lanjutkan jika masih ada transaksi
-}
-}
