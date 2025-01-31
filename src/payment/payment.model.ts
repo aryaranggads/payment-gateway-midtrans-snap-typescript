@@ -1,9 +1,15 @@
-import { IsBoolean, IsNotEmpty, IsNumber, IsOptional, IsString, Min } from 'class-validator';
+import { IsBoolean, IsNotEmpty, IsNumber, IsOptional, IsString, Min, MaxLength } from 'class-validator';
 
 export class TransactionDto {
   @IsString()
   @IsNotEmpty()
-  orderId: string;
+  order_id: string;
+
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(255, { message: 'User ID cannot exceed 255 characters' })
+  user_id: string;
+
 
   @IsString()
   @IsNotEmpty()
@@ -22,13 +28,13 @@ export class TransactionDto {
   phone: string;
 
   @IsBoolean()
-  @IsNotEmpty()
-  isKwh: boolean;
+  @IsOptional() // Changed to optional as it might not always be provided
+  isKwh?: boolean;
 
   @IsNumber()
   @Min(1, { message: 'Amount must be greater than 0' })
-  @IsNotEmpty()
-  amount: number;
+  @IsOptional() // Changed to optional as it might not always be provided
+  amount?: number;
 
   @IsOptional()
   itemDetails?: Array<{

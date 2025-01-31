@@ -1,13 +1,24 @@
 import { Module } from '@nestjs/common';
-import { AppController } from './app.controller';
-import { AppService } from './app.service';
+import { ScheduleModule } from '@nestjs/schedule'; // Cron Job
+import { TypeOrmModule } from '@nestjs/typeorm';
+import { ConfigModule } from '@nestjs/config';
 import { PaymentModule } from './payment/payment.module';
-import { drizzle } from 'drizzle-orm/mysql2';
-
+import { TransactionEntity } from './payment/transaction.entity';
 
 @Module({
-  imports: [PaymentModule],
-  controllers: [AppController],
-  providers: [AppService],
+  imports: [
+    ConfigModule.forRoot(),
+    ScheduleModule.forRoot(), // Inisialisasi Cron Job
+    TypeOrmModule.forRoot({
+      type: 'mysql',
+      host: 'localhost',
+      port: 3306,
+      username: 'root',
+      database: 'midtrans_payment',
+      entities: [TransactionEntity],
+      synchronize: true,
+    }),
+    PaymentModule,
+  ],
 })
 export class AppModule {}
