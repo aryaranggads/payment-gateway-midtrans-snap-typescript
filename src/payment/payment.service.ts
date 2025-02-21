@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, BadRequestException } from '@nestjs/common';
 import * as midtransClient from 'midtrans-client';
 import { PrismaService } from 'src/prisma.service';
 import { ConfigService } from '@nestjs/config';
@@ -12,13 +12,9 @@ export class PaymentService {
   private core: midtransClient.CoreApi;
   private readonly logger = new Logger(PaymentService.name);
 
-    async getPayments() {
-    return await this.prisma.transaction.findMany();
-  }
-
   constructor(
     private readonly configService: ConfigService,
-    private readonly prisma: PrismaService, // Gunakan PrismaService
+    private readonly prisma: PrismaService,
   ) {
     this.snap = new midtransClient.Snap({
       isProduction: false,
@@ -31,6 +27,10 @@ export class PaymentService {
       serverKey: this.configService.get<string>('MIDTRANS_SERVER_KEY'),
       clientKey: this.configService.get<string>('MIDTRANS_CLIENT_KEY'),
     });
+  }
+
+  async getPayments() {
+    return await this.prisma.transaction.findMany();
   }
 
   async createTransaction(transactionDto: TransactionDto) {
@@ -62,7 +62,8 @@ export class PaymentService {
     baseAmount = Math.round(baseAmount);
     const taxAmount1 = Math.round(baseAmount * taxRate1);
     const taxAmount2 = Math.round(baseAmount * taxRate2);
-    const totalamount = transactionDto.amount!;
+    const totalamount = baseAmount + taxAmount1 + taxAmount2 + admin_fee;
+
 
     const itemDetails = [
       { id: 'electricity', price: baseAmount, quantity: 1, name: `${consumptionKwh.toFixed(0)} kWh Usage` },
@@ -91,13 +92,10 @@ export class PaymentService {
 
     const response = await this.snap.createTransaction(parameter);
     this.logger.log(`Midtrans response: ${JSON.stringify(response)}`);
-    if (!transactionDto.order_id) {
-      throw new Error('Order ID is required for transaction creation.');
-    }
-    
+
     await this.prisma.transaction.create({
       data: {
-        order_id: transactionDto.order_id,  // Pastikan order_id tidak undefined atau null
+        order_id: transactionDto.order_id,
         user_id: transactionDto.user_id,
         transaction_status: 'pending',
         gross_amount: totalamount,
@@ -106,15 +104,32 @@ export class PaymentService {
         ppn: taxAmount1,
         pju: taxAmount2,
         adminFee: admin_fee,
-        payment_type: transactionDto.payment_type || '',
+        payment_type: transactionDto.payment_type || 'unknown',
         transaction_time: new Date(),
       },
     });
-    
-    
 
     return response;
   }
+
+  async getUserTransactions(userId: string, status?: string) {
+    const whereCondition: any = { user_id: userId };
+
+    if (status) {
+      whereCondition.transaction_status = status;
+    }
+
+    return await this.prisma.transaction.findMany({
+      where: {
+        user_id: parseInt("32", 10), // Konversi string ke integer
+      },
+      orderBy: {
+        transaction_time: "desc"
+      }
+    });
+  }
+    
+
 
   async updateTransactionStatus(orderId: string, webhookDto: MidtransWebhookDto): Promise<void> {
     this.logger.log(`Updating transaction ${orderId} with status: ${webhookDto.transaction_status}`);
@@ -201,7 +216,6 @@ export class PaymentService {
           updatedAt: new Date(),
         },
       });
-      
       
       return response;
     } catch (error) {

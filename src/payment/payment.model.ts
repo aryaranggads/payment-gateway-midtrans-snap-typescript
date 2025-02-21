@@ -30,7 +30,7 @@ export class TransactionDto {
   @IsOptional()
   isKwh?: boolean;
 
-  payment_type?: 'qris' | 'bank_transfer' | 'credit_card' | 'alfamart' | 'shopeepay' | 'qris_custom';
+  payment_type?: 'qris' | 'bank_transfer' | 'credit_card' | 'alfamart' | 'shopeepay' ;
 
 
   @IsNumber()

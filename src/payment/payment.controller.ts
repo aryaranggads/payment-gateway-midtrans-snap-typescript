@@ -1,4 +1,4 @@
-import { Controller, Post, Body, Logger, HttpException, HttpStatus, BadRequestException } from '@nestjs/common';
+import { Controller,Param, Post, Query, Get, Body, Logger, HttpException, HttpStatus, BadRequestException } from '@nestjs/common';
 import { PaymentService } from './payment.service';
 import { TransactionDto } from './payment.model';
 import { MidtransWebhookDto } from './webhook.dto';
@@ -30,6 +30,25 @@ export class PaymentController {
       );
     }
   }
+
+  @Get('transaction-status/:order_id')
+  async getTransactionStatus(@Param('order_id') orderId: string) {
+  return this.paymentService.getTransactionStatus(orderId);
+}
+
+
+  @Get('history/:user_id')
+  async getTransactionHistory(
+    @Param('user_id') userId: string,
+    @Query('status') status?: string
+  ) {
+    if (!userId) {
+      throw new BadRequestException('User ID is required');
+    }
+    const transactions = await this.paymentService.getUserTransactions(userId, status);
+    return { status: 'SUCCESS', data: transactions };
+  }
+  
 
   @Post('webhook')
   async handleWebhook(@Body() webhookDto: MidtransWebhookDto): Promise<any> {
