@@ -5,9 +5,8 @@ export class TransactionEntity {
   @PrimaryGeneratedColumn()
   id: number;
 
-  @Column()
+  @Column({ type: 'varchar', unique: true, nullable: false })
   order_id: string;
-
 
   @Column("decimal", { precision: 10, scale: 2, default: 0 })
   ppn: number;
@@ -22,17 +21,14 @@ export class TransactionEntity {
   payment_type: string;
 
   @Column({ nullable: true })
-  payment_detail: string; 
+  payment_detail?: string; 
 
-  @Column()
+  @Column("decimal", { precision: 10, scale: 2, default: 0 })
   gross_amount: number;
 
-  @Column()
+  @Column({ type: 'timestamp', default: () => 'CURRENT_TIMESTAMP' })
   transaction_time: Date;
 
   @Column()
   user_id: string;  
-
-
-
 }

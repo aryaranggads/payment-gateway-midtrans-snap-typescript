@@ -8,7 +8,7 @@ export class TransactionDto {
   @IsString()
   @IsNotEmpty()
   @MaxLength(255, { message: 'User ID cannot exceed 255 characters' })
-  user_id: string;
+  user_id:  number;
 
   @IsString()
   @IsNotEmpty()
@@ -30,19 +30,13 @@ export class TransactionDto {
   @IsOptional()
   isKwh?: boolean;
 
+  payment_type?: 'qris' | 'bank_transfer' | 'credit_card' | 'alfamart' | 'shopeepay' | 'qris_custom';
+
+
   @IsNumber()
   @Min(1, { message: 'Amount must be greater than 0' })
   @IsOptional()
   amount?: number;
-
-  @IsString()
-  @IsOptional()
-  unit?: string;
-
-  @IsNumber()
-  @Min(1, { message: 'Duration must be at least 1' })
-  @IsOptional()
-  duration?: number;
 
   @IsOptional()
   itemDetails?: Array<{

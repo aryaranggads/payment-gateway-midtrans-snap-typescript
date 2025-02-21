@@ -1,89 +1,68 @@
-import { Controller, Post, Body, Get, HttpException, HttpStatus, Logger, Param } from '@nestjs/common';
+import { Controller, Post, Body, Logger, HttpException, HttpStatus, BadRequestException } from '@nestjs/common';
 import { PaymentService } from './payment.service';
 import { TransactionDto } from './payment.model';
-import { ResponseStatus } from './response-status.enum';
+import { MidtransWebhookDto } from './webhook.dto';
+import { or } from 'drizzle-orm';
 
-
-
-@Controller('payment') // Root route "/payment"
+@Controller('payment')
 export class PaymentController {
   private readonly logger = new Logger(PaymentController.name);
-  
+  private requestBody: TransactionDto | null = null;
+  private webhookDto: MidtransWebhookDto | null = null;
+  private result:any;
 
   constructor(private readonly paymentService: PaymentService) {}
 
-  @Post('webhook')
-  async handleWebhook(@Body() payload: TransactionDto) {
-    this.logger.log('Webhook received from Midtrans', JSON.stringify(payload));
-
-    try {
-      // Proses payload notifikasi
-      await this.paymentService.handleWebhookNotification(payload);
-
-      return { status: 'success', message: 'Notification processed successfully' };
-    } catch (error) {
-      this.logger.error('Error processing webhook', error.message);
-
-      throw new HttpException(
-        { status: 'error', message: error.message || 'Failed to process notification' },
-        HttpStatus.INTERNAL_SERVER_ERROR,
-      );
-    }
-  }
-
-  @Get('transaction/:orderId')
-  async getTransactionByOrderId(@Param('orderId') orderId: string) {
-    this.logger.log(`Fetching transaction for order_id: ${orderId}`);
-
-    try {
-      const transaction = await this.paymentService.getTransactionByOrderId(orderId);
-      if (!transaction) {
-        throw new HttpException(
-          { status: 'error', message: 'Transaction not found' },
-          HttpStatus.NOT_FOUND,
-        );
-      }
-
-      return {
-        status: 'success',
-        data: transaction,
-      };
-    } catch (error) {
-      this.logger.error(`Error fetching transaction for order_id: ${orderId}`, error.message);
-
-      throw new HttpException(
-        { status: 'error', message: error.message || 'Failed to fetch transaction' },
-        HttpStatus.INTERNAL_SERVER_ERROR,
-      );
-    }
-  }
-
-    
-
-  @Post('transaction') // Endpoint menjadi "/payment/transaction"
+  @Post('transaction')
   async createTransaction(@Body() createTransactionDto: TransactionDto) {
-    this.logger.log('Received request to create transaction', createTransactionDto);
     try {
-      // Panggil service untuk membuat transaksi
-      const result = await this.paymentService.createTransaction(createTransactionDto);
-      this.logger.log('Transaction successfully created', result);
-
-      // Kembalikan hasil jika berhasil
-      return {
-        status: ResponseStatus.SUCCESS,
-        data: result,
-      };
+      this.logger.log(`Request to create transaction: ${JSON.stringify(createTransactionDto)}`);
+      this.requestBody = createTransactionDto;
+      this.logger.log(`Request to create transaction: ${JSON.stringify(this.requestBody)}`);
+       this.result = await this.paymentService.createTransaction(createTransactionDto);
+      this.logger.log(`Result: ${JSON.stringify(this.result)}`);
+      return { status: 'SUCCESS', data: this.result };
     } catch (error) {
-      this.logger.error('Error creating transaction', error.message);
-
-      // Tangani error dan kembalikan response dengan status 500
+      this.logger.error(`Error creating transaction: ${error.message}`);
       throw new HttpException(
-        {
-          status: ResponseStatus.ERROR,
-          message: error.message || 'Something went wrong',
-        },
+        { status: 'ERROR', message: error.message },
         HttpStatus.INTERNAL_SERVER_ERROR,
       );
     }
   }
-}
+
+  @Post('webhook')
+  async handleWebhook(@Body() webhookDto: MidtransWebhookDto): Promise<any> {
+    this.logger.log(`Received Webhook: ${JSON.stringify(webhookDto)}`);
+    this.webhookDto = webhookDto;
+  
+    // Cek apakah order_id ada
+    if (!webhookDto.order_id) {
+      this.logger.error('Missing order_id in webhook payload');
+      throw new BadRequestException('Invalid webhook payload');
+    }
+  
+    // Verifikasi signature
+    const isSignatureValid = this.paymentService.verifySignature(
+      this.requestBody.order_id,
+      this.webhookDto.status_code,
+      this.webhookDto.gross_amount.toString(),
+      this.webhookDto.signature_key,
+    );
+  
+    if (!isSignatureValid) {
+      this.logger.warn('Invalid signature detected');
+      throw new BadRequestException('Invalid signature');
+    }
+  
+    // Log sebelum update transaksi
+    this.logger.log(`Updating transaction status for Order ID: ${webhookDto.order_id}`);
+  
+    // Update transaksi
+    await this.paymentService.updateTransactionStatus(webhookDto.order_id, webhookDto);
+  
+    this.logger.log(`Transaction updated: ${JSON.stringify(webhookDto)}`);
+  
+    return { message: 'Webhook processed successfully' };
+  }
+}  

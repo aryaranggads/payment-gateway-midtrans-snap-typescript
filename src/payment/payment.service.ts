@@ -1,22 +1,24 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import * as midtransClient from 'midtrans-client';
-import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { PrismaService } from 'src/prisma.service';
+import { ConfigService } from '@nestjs/config';
 import { TransactionDto } from './payment.model';
-import { TransactionEntity } from './transaction.entity';
-import { ConfigService } from '@nestjs/config'; 
-import { PaymentController } from './payment.controller';
-
+import * as crypto from 'crypto';
+import { MidtransWebhookDto } from './webhook.dto';
 
 @Injectable()
 export class PaymentService {
   private snap: midtransClient.Snap;
   private core: midtransClient.CoreApi;
+  private readonly logger = new Logger(PaymentService.name);
+
+    async getPayments() {
+    return await this.prisma.transaction.findMany();
+  }
 
   constructor(
-    @InjectRepository(TransactionEntity)
-    private transactionRepository: Repository<TransactionEntity>,
-    private configService: ConfigService,
+    private readonly configService: ConfigService,
+    private readonly prisma: PrismaService, // Gunakan PrismaService
   ) {
     this.snap = new midtransClient.Snap({
       isProduction: false,
@@ -31,82 +33,48 @@ export class PaymentService {
     });
   }
 
-  private roundToEven(num: number): number {
-    const rounded = Math.round(num);
-    return rounded % 2 === 0 ? rounded : rounded + 1;
-  }
-
   async createTransaction(transactionDto: TransactionDto) {
-    if (!transactionDto.user_id) {
-      throw new Error('User ID is required and must be unique.');
-    }
+    this.logger.log(`Creating transaction: ${JSON.stringify(transactionDto)}`);
 
-    const existingTransaction = await this.transactionRepository.findOne({
-      where: { user_id: transactionDto.user_id },
+    const existingTransaction = await this.prisma.transaction.findUnique({
+      where: { order_id: transactionDto.order_id },
     });
-
     if (existingTransaction) {
-      throw new Error('User ID must be unique. A transaction with this user_id already exists.');
+      throw new Error(`Transaction with order ID ${transactionDto.order_id} already exists.`);
     }
 
-    const taxRate1 = 0.12; // PPN 12%
-    const taxRate2 = 0.05; // PJU 5%
-    const pricePerKwh = 2466; // Harga per kWh
+    const taxRate1 = 0.12;
+    const taxRate2 = 0.05;
+    const pricePerKwh = 2466;
     const kwhPerRupiah = 1 / pricePerKwh;
-
+    const admin_fee = 4000;
     let consumptionKwh: number;
     let baseAmount: number;
 
-    if (transactionDto.isKwh === undefined || transactionDto.amount === undefined) {
-      throw new Error('Both isKwh and amount must be provided');
-    }
-
     if (transactionDto.isKwh) {
-      if (transactionDto.amount <= 0) {
-        throw new Error('Amount in kWh must be greater than 0');
-      }
-      consumptionKwh = transactionDto.amount;
+      consumptionKwh = transactionDto.amount!;
       baseAmount = consumptionKwh * pricePerKwh;
     } else {
-      if (transactionDto.amount <= 0) {
-        throw new Error('Amount in Rupiah must be greater than 0');
-      }
-
-      const totalAmount = transactionDto.amount;
-      baseAmount = totalAmount / (1 + taxRate1 + taxRate2);
+      baseAmount = (transactionDto.amount! - admin_fee) / (1 + taxRate1 + taxRate2);
       consumptionKwh = baseAmount * kwhPerRupiah;
     }
 
     baseAmount = Math.round(baseAmount);
     const taxAmount1 = Math.round(baseAmount * taxRate1);
     const taxAmount2 = Math.round(baseAmount * taxRate2);
-    const totalAmount = baseAmount + taxAmount1 + taxAmount2;
+    const totalamount = transactionDto.amount!;
 
-    transactionDto.itemDetails = [
-      {
-        id: 'electricity',
-        price: baseAmount,
-        quantity: 1,
-        name: `${consumptionKwh.toFixed(0)} kWh Usage`,
-      },
-      {
-        id: 'tax1',
-        price: taxAmount1,
-        quantity: 1,
-        name: 'PPN 12%',
-      },
-      {
-        id: 'tax2',
-        price: taxAmount2,
-        quantity: 1,
-        name: 'PJU 5%',
-      },
+    const itemDetails = [
+      { id: 'electricity', price: baseAmount, quantity: 1, name: `${consumptionKwh.toFixed(0)} kWh Usage` },
+      { id: 'tax1', price: taxAmount1, quantity: 1, name: 'PPN 12%' },
+      { id: 'tax2', price: taxAmount2, quantity: 1, name: 'PJU 5%' },
+      { id: 'admin_fee', price: admin_fee, quantity: 1, name: 'Admin Fee' },
     ];
 
     const parameter = {
       transaction_details: {
         order_id: transactionDto.order_id,
-        gross_amount: totalAmount,
+        gross_amount: totalamount,
       },
       customer_details: {
         first_name: transactionDto.first_name,
@@ -114,115 +82,131 @@ export class PaymentService {
         email: transactionDto.email,
         phone: transactionDto.phone,
       },
+      item_details: itemDetails,
       expiry: {
-        unit: "hour",
-        duration: 2,
+        unit: 'minutes',
+        duration: 30,
       },
-      credit_card: {
-        secure: true,
-      },
-      item_details: transactionDto.itemDetails,
     };
 
     const response = await this.snap.createTransaction(parameter);
+    this.logger.log(`Midtrans response: ${JSON.stringify(response)}`);
+    if (!transactionDto.order_id) {
+      throw new Error('Order ID is required for transaction creation.');
+    }
+    
+    await this.prisma.transaction.create({
+      data: {
+        order_id: transactionDto.order_id,  // Pastikan order_id tidak undefined atau null
+        user_id: transactionDto.user_id,
+        transaction_status: 'pending',
+        gross_amount: totalamount,
+        totalPricePower: baseAmount,
+        totalPower: parseFloat(consumptionKwh.toFixed(2)),
+        ppn: taxAmount1,
+        pju: taxAmount2,
+        adminFee: admin_fee,
+        payment_type: transactionDto.payment_type || '',
+        transaction_time: new Date(),
+      },
+    });
+    
+    
 
-    const transaction = new TransactionEntity();
-    transaction.order_id = transactionDto.order_id;
-    transaction.transaction_status = 'pending';
-    transaction.payment_type = 'undefined';
-    transaction.gross_amount = parameter.transaction_details.gross_amount;
-    transaction.ppn = taxAmount1;
-    transaction.pju = taxAmount2;
-    transaction.transaction_time = new Date();
-    transaction.user_id = transactionDto.user_id;
-
-    await this.transactionRepository.save(transaction);
-
-    console.log('Transaction created successfully', response);
-    return { 
-      response,
-      transaction: {
-        order_id: transaction.order_id,
-        user_id: transaction.user_id,
-        transaction_status: transaction.transaction_status,
-        payment_type: transaction.payment_type,
-        gross_amount: transaction.gross_amount,
-        ppn: transaction.ppn,
-        pju: transaction.pju,
-        transaction_time: transaction.transaction_time,
-     },
-    };
+    return response;
   }
 
-  async checkTransactionStatus(orderId: string) {
+  async updateTransactionStatus(orderId: string, webhookDto: MidtransWebhookDto): Promise<void> {
+    this.logger.log(`Updating transaction ${orderId} with status: ${webhookDto.transaction_status}`);
+
+    const transaction = await this.prisma.transaction.findUnique({ where: { order_id: orderId } });
+    if (!transaction) {
+      this.logger.error(`Transaction with Order ID ${orderId} not found`);
+      throw new Error(`Transaction with order ID ${orderId} not found`);
+    }
+
+    let paymentDetail = '';
+    switch (webhookDto.payment_type) {
+      case 'qris':
+        paymentDetail = webhookDto.issuer || '';
+        break;
+      case 'bank_transfer':
+        paymentDetail = webhookDto.va_numbers?.[0]?.bank || '';
+        break;
+      case 'credit_card':
+        paymentDetail = webhookDto.bank || '';
+        break;
+      case 'alfamart':
+        paymentDetail = 'Alfamart';
+        break;
+      case 'shopeepay':
+        paymentDetail = 'ShopeePay';
+        break;
+      case 'gopay':
+        paymentDetail = webhookDto.payment_option_type || '';
+        break;
+    }
+
+    await this.prisma.transaction.update({
+      where: { order_id: orderId },
+      data: {
+        transaction_status: webhookDto.transaction_status,
+        payment_type: webhookDto.payment_type || '',
+        payment_detail: paymentDetail,
+        updatedAt: new Date(), 
+      },
+    });
+    
+  }
+
+  
+  verifySignature(orderId: string, statusCode: string, grossAmount: string, signatureKey: string): boolean {
+    const serverKey = this.configService.get<string>('MIDTRANS_SERVER_KEY');
+    if (!serverKey) {
+      throw new Error('Server key is not configured');
+    }
+  
+    const payload = `${orderId}${statusCode}${grossAmount}${serverKey}`;
+    const calculatedSignature = crypto.createHash('sha512').update(payload).digest('hex');
+  
+    this.logger.log(`Verifying signature for order ${orderId}`);
+    this.logger.debug(`Calculated signature: ${calculatedSignature}`);
+    this.logger.debug(`Received signature: ${signatureKey}`);
+  
+    const isValid = calculatedSignature === signatureKey;
+    this.logger.log(`Signature verification ${isValid ? 'successful' : 'failed'}`);
+    
+    return isValid;
+  }
+
+  async getTransactionStatus(orderId: string) {
     try {
-      const statusResponse = await this.core.transaction.status(orderId);
-
-      const transaction = await this.transactionRepository.findOne({
-        where: { order_id: orderId },
-      });
-
-      if (transaction) {
-        transaction.transaction_status = statusResponse.transaction_status;
-        transaction.payment_type = statusResponse.payment_type || transaction.payment_type;
-        transaction.gross_amount = statusResponse.gross_amount || transaction.gross_amount;
-        transaction.transaction_time = new Date(statusResponse.transaction_time || transaction.transaction_time);
-
-        await this.transactionRepository.save(transaction);
-      }
-
-      return { status: 'success',
-        message: 'Transaction created successfully',
-        data: {
-        
-          order_id: transaction.order_id,
-          user_id: transaction.user_id,
-          transaction_status: transaction.transaction_status,
-          payment_type: transaction.payment_type,
-          gross_amount: transaction.gross_amount,
-          ppn: transaction.ppn,
-          pju: transaction.pju,
-          transaction_time: transaction.transaction_time,
-       },
-      };
+      const response = await this.core.transaction.status(orderId);
+      return response;
     } catch (error) {
+      this.logger.error(`Error getting transaction status: ${error.message}`);
       throw error;
     }
   }
-  async handleWebhookNotification(payload: any) {
-    const {
-      order_id,
-      transaction_status,
-      payment_type,
-      gross_amount,
-      transaction_time,
-      acquirer,
-  
-       // Ambil acquirer dari payload Midtrans
-    } = payload;
-  
-    const transaction = await this.transactionRepository.findOne({
-      where: { order_id: order_id },
-    });
-  
-    if (!transaction) {
-      console.error(`Transaction with order ID ${order_id} not found.`);
-      return;
-    }
-  
-    transaction.transaction_status = transaction_status;
-    transaction.payment_type = payment_type;
-    transaction.gross_amount = gross_amount;
-    transaction.transaction_time = new Date(transaction_time);
-    transaction.payment_detail = acquirer || null; // Simpan acquirer sebagai payment_detail
-   
-  
-  }
-  async getTransactionByOrderId(orderId: string): Promise<TransactionEntity | null> {
-    return this.transactionRepository.findOne({
-      where: { order_id: orderId },
-    });
-  }
-  
-}
 
+  async cancelTransaction(orderId: string) {
+    try {
+      const response = await this.core.transaction.cancel(orderId);
+      
+      // Update local transaction status
+      await this.prisma.transaction.update({
+        where: { order_id: orderId }, // Perbaikan dari orderId
+        data: {
+          transaction_status: 'cancel',
+          updatedAt: new Date(),
+        },
+      });
+      
+      
+      return response;
+    } catch (error) {
+      this.logger.error(`Error canceling transaction: ${error.message}`);
+      throw error;
+    }
+  }
+}
