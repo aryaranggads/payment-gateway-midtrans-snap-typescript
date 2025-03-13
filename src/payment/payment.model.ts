@@ -30,8 +30,11 @@ export class TransactionDto {
   @IsOptional()
   isKwh?: boolean;
 
-  payment_type?: 'qris' | 'bank_transfer' | 'credit_card' | 'alfamart' | 'shopeepay' ;
+  payment_type?:  | 'bank_transfer' | 'credit_card' | 'alfamart' | 'shopeepay' | 'gopay' | 'alfamart'| 'indomaret';
 
+  @IsBoolean()
+  @IsOptional()
+  va_number?: string;
 
   @IsNumber()
   @Min(1, { message: 'Amount must be greater than 0' })
